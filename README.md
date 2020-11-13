@@ -6,4 +6,4 @@ The new parameter takes the format `?__canary=abcdefgh`, and an issue will be ra
 
 Other extensions like Reflected Parameters will also pick up the reflection.
 
-This is disabled by default, as some apps don't like it. Use the new menu to enable it, and limit it to only in-scope requests (this is enabled by default).
+This is disabled by default, as some apps don't like it. Use the new "Reflect/Detect" menu to enable it, and limit it to only in-scope requests (this is enabled by default).
