@@ -1,5 +1,10 @@
 from array import array
-from burp import IBurpExtender, IHttpListener, IScanIssue
+from burp import IBurpExtender, IHttpListener, IScanIssue, IExtensionStateListener
+
+# IExtensionStateListener is to detect unloading
+
+from javax import swing
+from java.awt import Frame
 
 import random
 import re
@@ -24,7 +29,7 @@ def fix_exception(func):
     return wrapper
 
 
-class BurpExtender(IBurpExtender, IHttpListener):
+class BurpExtender(IBurpExtender, IExtensionStateListener, IHttpListener):
 
     _callbacks = None
     _helpers = None
@@ -36,6 +41,27 @@ class BurpExtender(IBurpExtender, IHttpListener):
         self._parameter = self._field + ''.join(random.choice(string.ascii_lowercase) for c in range(8))
         print("Using random querystring parameter {}".format(self._parameter))
 
+        burp_frame = None
+        for frame in Frame.getFrames():
+            if frame.isVisible() and frame.getTitle().startswith("Burp Suite"):
+                burp_frame = frame
+
+        self._menu = swing.JMenu("Reflect/Detect")
+        # TODO make it remember the settings
+        self._enabled_menu = swing.JCheckBoxMenuItem("Enabled", False)
+        self._menu.add(self._enabled_menu)
+        self._scope_menu = swing.JCheckBoxMenuItem("In scope only", True)
+        self._menu.add(self._scope_menu)
+        bar = burp_frame.getJMenuBar()
+        bar.add(self._menu, bar.getMenuCount())
+        bar.repaint()
+
+    def extensionUnloaded(self):
+        print("unloading " + NAME)
+        bar = self._menu.getParent()
+        bar.remove(self._menu)
+        bar.repaint()
+
     def registerExtenderCallbacks(self, callbacks):
         # for error handling
         sys.stdout = callbacks.getStdout()  
@@ -45,7 +71,7 @@ class BurpExtender(IBurpExtender, IHttpListener):
         self._helpers = callbacks.getHelpers()
 
         callbacks.setExtensionName(NAME)
-
+        callbacks.registerExtensionStateListener(self)
         callbacks.registerHttpListener(self)
 
     def consolidateDuplicateIssues(self, existingIssue, newIssue):
@@ -54,17 +80,22 @@ class BurpExtender(IBurpExtender, IHttpListener):
         return 0
 
     def processHttpMessage(self, toolFlag, messageIsRequest, messageInfo):
+
+        if not self._enabled_menu.isSelected():
+            return
+
         requestInfo = self._helpers.analyzeRequest(messageInfo.getHttpService(), messageInfo.getRequest())
-        if not self._callbacks.isInScope(requestInfo.getUrl()):
+        if self._scope_menu.isSelected() and not self._callbacks.isInScope(requestInfo.getUrl()):
             return
 
         if messageIsRequest:
+
             body = messageInfo.getRequest()[requestInfo.getBodyOffset():]
             bodyString = self._helpers.bytesToString(body).encode('ascii', 'ignore')
             headers = requestInfo.getHeaders()
             http_method, path, _x, querystring, http_version = re.findall(r"""^(?P<method>\w+) (?P<URL>[^ \?]+)(\?(?P<QS>[^ ]+))? (?P<http>.*)$""", headers[0])[0]
             
-            if self._field in querystring:
+            if querystring and self._field in querystring:
                 # don't re-add the header
                 # print("already exists in {}".format(querystring))
                 return
