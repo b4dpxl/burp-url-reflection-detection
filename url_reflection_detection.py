@@ -6,6 +6,7 @@ from burp import IBurpExtender, IHttpListener, IScanIssue, IExtensionStateListen
 from javax import swing
 from java.awt import Frame
 
+import json
 import random
 import re
 import string
@@ -17,15 +18,19 @@ from java.net import URL
 
 NAME = "URL Reflection Detection"
 
+SETTING_IN_SCOPE_ONLY = "SETTING_IN_SCOPE_ONLY"
+SETTING_TOOLS = "SETTING_TOOLS"
+
 
 def fix_exception(func):
     def wrapper(self, *args, **kwargs):
         try:
             return func(self, *args, **kwargs)
-        except Exception:
-            sys.stderr.write('\n\n*** PYTHON EXCEPTION\n')
-            traceback.print_exc(file=sys.stderr)
-            raise
+        except Exception as e:
+            print("\n\n*** PYTHON EXCEPTION")
+            print(traceback.format_exc(e))
+            print("*** END\n")
+            # raise
     return wrapper
 
 
@@ -37,30 +42,7 @@ class BurpExtender(IBurpExtender, IExtensionStateListener, IHttpListener):
     _field = "__canary="
 
     def __init__(self):
-        self._field
-        self._parameter = self._field + ''.join(random.choice(string.ascii_lowercase) for c in range(8))
-        print("Using random querystring parameter {}".format(self._parameter))
-
-        burp_frame = None
-        for frame in Frame.getFrames():
-            if frame.isVisible() and frame.getTitle().startswith("Burp Suite"):
-                burp_frame = frame
-
-        self._menu = swing.JMenu("Reflect/Detect")
-        # TODO make it remember the settings
-        self._enabled_menu = swing.JCheckBoxMenuItem("Enabled", False)
-        self._menu.add(self._enabled_menu)
-        self._scope_menu = swing.JCheckBoxMenuItem("In scope only", True)
-        self._menu.add(self._scope_menu)
-        bar = burp_frame.getJMenuBar()
-        bar.add(self._menu, bar.getMenuCount())
-        bar.repaint()
-
-    def extensionUnloaded(self):
-        print("unloading " + NAME)
-        bar = self._menu.getParent()
-        bar.remove(self._menu)
-        bar.repaint()
+        pass
 
     def registerExtenderCallbacks(self, callbacks):
         # for error handling
@@ -74,18 +56,114 @@ class BurpExtender(IBurpExtender, IExtensionStateListener, IHttpListener):
         callbacks.registerExtensionStateListener(self)
         callbacks.registerHttpListener(self)
 
+        self._field
+        self._parameter = self._field + ''.join(random.choice(string.ascii_lowercase) for c in range(8))
+        print("Using random querystring parameter {}".format(self._parameter))
+
+        burp_frame = None
+        for frame in Frame.getFrames():
+            if frame.isVisible() and frame.getTitle().startswith("Burp Suite"):
+                burp_frame = frame
+
+        self._menu = swing.JMenu("Reflect/Detect")
+        self._enabled_menu = swing.JCheckBoxMenuItem("Enabled", False)
+        self._menu.add(self._enabled_menu)
+
+        s_iso = self._callbacks.loadExtensionSetting(SETTING_IN_SCOPE_ONLY)
+        iso = True if s_iso is None else s_iso.lower() == 'true'  # why doesn't bool() work?
+
+        s_tools = self._callbacks.loadExtensionSetting(SETTING_TOOLS)
+        self._tools = {}
+        if s_tools:
+            self._tools = json.loads(s_tools.decode())
+
+        self._scope_menu = swing.JCheckBoxMenuItem("In scope only", iso)
+        self._menu.add(self._scope_menu)
+        self._tool_menu = swing.JMenu("Apply to ...")
+
+        self._proxy_menu = swing.JCheckBoxMenuItem("Proxy", self._tools.get("PROXY", True))
+        self._tool_menu.add(self._proxy_menu)
+
+        self._repeater_menu = swing.JCheckBoxMenuItem("Repeater", self._tools.get("REPEATER", False))
+        self._tool_menu.add(self._repeater_menu)
+
+        self._scanner_menu = swing.JCheckBoxMenuItem("Scanner", self._tools.get("SCANNER", False))
+        self._tool_menu.add(self._scanner_menu)
+
+        self._spider_menu = swing.JCheckBoxMenuItem("Spider", self._tools.get("SPIDER", False))
+        self._tool_menu.add(self._spider_menu)
+
+        self._intruder_menu = swing.JCheckBoxMenuItem("Intruder", self._tools.get("INTRUDER", False))
+        self._tool_menu.add(self._intruder_menu)
+
+        self._sequencer_menu = swing.JCheckBoxMenuItem("Sequencer", self._tools.get("SEQUENCER", False))
+        self._tool_menu.add(self._sequencer_menu)
+
+        self._menu.add(self._tool_menu)
+        bar = burp_frame.getJMenuBar()
+        bar.add(self._menu, bar.getMenuCount())
+        bar.repaint()
+
+    @fix_exception
+    def extensionUnloaded(self):
+        print("Unloading " + NAME)
+        tools = {
+            "PROXY": self._proxy_menu.isSelected(),
+            "SPIDER": self._spider_menu.isSelected(),
+            "SCANNER": self._scanner_menu.isSelected(),
+            "INTRUDER": self._intruder_menu.isSelected(),
+            "REPEATER": self._repeater_menu.isSelected(),
+            "SEQUENCER": self._sequencer_menu.isSelected()
+        }
+        # print(tools)
+        self._callbacks.saveExtensionSetting(SETTING_TOOLS, json.dumps(tools))
+        self._callbacks.saveExtensionSetting(SETTING_IN_SCOPE_ONLY, str(self._scope_menu.isSelected()))
+        bar = self._menu.getParent()
+        bar.remove(self._menu)
+        bar.repaint()
+        # print("Unloaded " + NAME)
+
     def consolidateDuplicateIssues(self, existingIssue, newIssue):
         if existingIssue.getIssueName() == newIssue.getIssueName() and existingIssue.getIssueDetail() == newIssue.getIssueDetail():
             return -1
         return 0
 
+    def _tool_allowed(self, tool):
+        if tool == self._callbacks.TOOL_PROXY:
+            return self._proxy_menu.isSelected()
+
+        elif tool == self._callbacks.TOOL_SPIDER:
+            return self._spider_menu.isSelected()
+
+        elif tool == self._callbacks.TOOL_SCANNER:
+            return self._scanner_menu.isSelected()
+
+        elif tool == self._callbacks.TOOL_INTRUDER:
+            return self._intruder_menu.isSelected()
+
+        elif tool == self._callbacks.TOOL_REPEATER:
+            return self._repeater_menu.isSelected()
+
+        elif tool == self._callbacks.TOOL_SEQUENCER:
+            return self._sequencer_menu.isSelected()
+
+        else:
+            # everything else
+            return False
+
+    @fix_exception
     def processHttpMessage(self, toolFlag, messageIsRequest, messageInfo):
 
         if not self._enabled_menu.isSelected():
             return
 
+        if not self._tool_allowed(toolFlag):
+            # skipping this tool
+            return
+
         requestInfo = self._helpers.analyzeRequest(messageInfo.getHttpService(), messageInfo.getRequest())
         if self._scope_menu.isSelected() and not self._callbacks.isInScope(requestInfo.getUrl()):
+            # not in scope, skipping
             return
 
         if messageIsRequest:
@@ -106,6 +184,8 @@ class BurpExtender(IBurpExtender, IExtensionStateListener, IHttpListener):
             else:
                 URI = '{}?{}'.format(path, self._parameter)
                 # URI = path + '?' + self._parameter
+
+            # print(URI)
 
             headers[0] = "{} {} {}".format(http_method, URI, http_version)
             messageInfo.setRequest(self._helpers.buildHttpMessage(headers, body))
